@@ -1,0 +1,20 @@
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: ping
+      ansible.builtin.ping:
+
+    - name: change
+      ansible.builtin.command: /bin/true
+      changed_when: true
+      tags: t
+
+    - name: tolerated failure
+      ansible.builtin.command: /bin/false
+      ignore_errors: true
+
+    - name: skipped
+      ansible.builtin.debug:
+        msg: never
+      when: false
