@@ -1,10 +1,25 @@
 from __future__ import annotations
 
-DOCUMENTATION = """
-    name: audit_log
-    type: notification
-    short_description: One JSONL audit file per playbook run
-    description: Records who ran which playbook, when, with what options, and per-host outcomes.
+DOCUMENTATION = r"""
+author: 0uwl
+name: audit_log
+type: notification
+short_description: One JSONL audit file per playbook run
+description:
+  - Records who ran which playbook, when, with what options, and per-host outcomes.
+requirements:
+  - Enable in C(callback_enabled)
+  - A writeable C(audit_dir) for the user executing Ansible on the controller
+options:
+  audit_dir:
+    default: /audit/logs
+    description: The folder where audit files are created, in C(YYYY/MM) subfolders.
+    type: str
+    env:
+      - name: ANSIBLE_AUDIT_DIR
+    ini:
+      - section: callback_audit_log
+        key: audit_dir
 """
 
 import json
@@ -18,7 +33,9 @@ import yaml
 
 from ansible import context
 from ansible.parsing.splitter import parse_kv
+from ansible.parsing.ajson import AnsibleJSONEncoder
 from ansible.plugins.callback import CallbackBase
+from ansible.utils.path import makedirs_safe
 
 
 def _now():
@@ -59,6 +76,10 @@ def _redact(arg):
 
 
 class CallbackModule(CallbackBase):
+    """
+    writes one JSONL audit file per playbook run under audit_dir
+    """
+
     CALLBACK_VERSION = 2.0
     CALLBACK_TYPE = "notification"
     CALLBACK_NAME = "audit_log"
@@ -70,12 +91,18 @@ class CallbackModule(CallbackBase):
         self.fh = None
         self.started = None
 
+    def set_options(self, task_keys=None, var_options=None, direct=None):
+        super().set_options(task_keys=task_keys, var_options=var_options, direct=direct)
+
+        self.audit_dir = self.get_option("audit_dir")
+        makedirs_safe(self.audit_dir)
+
     # --- helpers -----------------------------------------------------
     def _write(self, event, **data):
         if not self.fh:
             return
         rec = {"ts": _now().isoformat(), "run_id": self.run_id, "event": event, **data}
-        self.fh.write(json.dumps(rec, default=str) + "\n")
+        self.fh.write(json.dumps(rec, cls=AnsibleJSONEncoder) + "\n")
         self.fh.flush()
         os.fsync(self.fh.fileno())
 
@@ -92,9 +119,8 @@ class CallbackModule(CallbackBase):
     # --- playbook lifecycle -----------------------------------------
     def v2_playbook_on_start(self, playbook):
         self.started = _now()
-        base = os.environ.get("ANSIBLE_AUDIT_DIR", "/audit/logs")
-        d = os.path.join(base, self.started.strftime("%Y"), self.started.strftime("%m"))
-        os.makedirs(d, exist_ok=True)
+        d = os.path.join(self.audit_dir, self.started.strftime("%Y"), self.started.strftime("%m"))
+        makedirs_safe(d)
 
         pb = os.path.basename(playbook._file_name)
         who = self._who()["user"]
@@ -140,11 +166,20 @@ class CallbackModule(CallbackBase):
             rc=r.get("rc"),
         )
 
-    def v2_runner_on_ok(self, result, **kw):          self._result("ok", result)
-    def v2_runner_on_failed(self, result, ignore_errors=False, **kw):
+    def v2_runner_on_ok(self, result):
+        self._result("ok", result)
+
+    def v2_runner_on_failed(self, result, ignore_errors=False):
         self._result("failed_ignored" if ignore_errors else "failed", result)
-    def v2_runner_on_skipped(self, result, **kw):     self._result("skipped", result)
-    def v2_runner_on_unreachable(self, result, **kw): self._result("unreachable", result)
+
+    def v2_runner_on_skipped(self, result):
+        self._result("skipped", result)
+
+    def v2_runner_on_unreachable(self, result):
+        self._result("unreachable", result)
+
+    def v2_runner_on_async_failed(self, result):
+        self._result("async_failed", result)
 
     def v2_playbook_on_stats(self, stats):
         recap = {h: stats.summarize(h) for h in sorted(stats.processed.keys())}

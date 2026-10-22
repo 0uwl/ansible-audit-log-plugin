@@ -33,8 +33,8 @@ def cb(tmp_path, monkeypatch, clock, cliargs):
     for v in ID_VARS:
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setenv("USER", "alice")
-    monkeypatch.setenv("ANSIBLE_AUDIT_DIR", str(tmp_path))
     c = audit_log.CallbackModule()
+    c.audit_dir = str(tmp_path)
     yield c
     if c.fh:
         c.fh.close()
@@ -107,18 +107,12 @@ def test_unsafe_chars_sanitised(cb, tmp_path, monkeypatch):
     assert f.name == f"20260102T030405Z_a_b_c_my_play_.yml_{cb.run_id}.jsonl"
 
 
-def test_default_audit_dir(cb, monkeypatch):
-    monkeypatch.delenv("ANSIBLE_AUDIT_DIR")
-    seen = []
-
-    def fake_makedirs(path, exist_ok=False):
-        seen.append(path)
-        raise RuntimeError("stop")
-
-    monkeypatch.setattr(audit_log.os, "makedirs", fake_makedirs)
-    with pytest.raises(RuntimeError):
-        cb.v2_playbook_on_start(playbook())
-    assert seen == ["/audit/logs/2026/01"]
+def test_set_options_creates_audit_dir(cb, tmp_path, monkeypatch):
+    target = tmp_path / "new" / "logs"
+    monkeypatch.setattr(audit_log.CallbackBase, "set_options", lambda *a, **kw: None)
+    monkeypatch.setattr(cb, "get_option", lambda name: str(target))
+    cb.set_options()
+    assert cb.audit_dir == str(target) and target.is_dir()
 
 
 # --- playbook_start record ---------------------------------------------
@@ -233,6 +227,7 @@ def test_write_before_start_is_noop(cb, tmp_path):
     (lambda c, r: c.v2_runner_on_failed(r, ignore_errors=True), "failed_ignored"),
     (lambda c, r: c.v2_runner_on_skipped(r), "skipped"),
     (lambda c, r: c.v2_runner_on_unreachable(r), "unreachable"),
+    (lambda c, r: c.v2_runner_on_async_failed(r), "async_failed"),
 ])
 def test_task_result_status(cb, tmp_path, call, status):
     cb.v2_playbook_on_start(playbook())
