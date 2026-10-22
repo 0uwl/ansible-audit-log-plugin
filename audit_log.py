@@ -1,4 +1,3 @@
-# /opt/ansible-audit/callback_plugins/audit_log.py
 from __future__ import annotations
 
 DOCUMENTATION = """
