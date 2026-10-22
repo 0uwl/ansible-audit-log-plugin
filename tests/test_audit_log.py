@@ -4,12 +4,12 @@ import os
 import re
 import socket
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-import pytest
-
 import audit_log
+import pytest
 
 T0 = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 ID_VARS = ("USER", "SUDO_USER", "LOGNAME", "SSH_CONNECTION")
@@ -202,14 +202,14 @@ def test_extra_var_keys(cb, cliargs, tmp_path, extra, keys):
 def test_argv_redacts_secret_extra_vars(cb, tmp_path, monkeypatch):
     cmdline = ["ansible-playbook", "-e", "password=s3cret env=prod", "--extra-vars=API_TOKEN=s3cret",
                "-e", "db_pass='s3cret s3cret' region=eu", "site.yml"]
-    real_open = open
+    real_read_text = Path.read_text
 
-    def fake_open(path, *a, **kw):
-        if path == "/proc/self/cmdline":
-            return MagicMock(read=lambda: "\0".join(cmdline) + "\0")
-        return real_open(path, *a, **kw)
+    def fake_read_text(self, *a, **kw):
+        if str(self) == "/proc/self/cmdline":
+            return "\0".join(cmdline) + "\0"
+        return real_read_text(self, *a, **kw)
 
-    monkeypatch.setattr(audit_log, "open", fake_open, raising=False)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
     cb.v2_playbook_on_start(playbook())
     (f,) = tmp_path.rglob("*.jsonl")
     assert "s3cret" not in f.read_text()

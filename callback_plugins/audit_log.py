@@ -31,12 +31,12 @@ import re
 import socket
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import yaml
-
 from ansible import context
-from ansible.parsing.splitter import parse_kv
 from ansible.parsing.ajson import AnsibleJSONEncoder
+from ansible.parsing.splitter import parse_kv
 from ansible.plugins.callback import CallbackBase
 from ansible.utils.path import makedirs_safe
 
@@ -45,8 +45,8 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-_SECRET_NAME = re.compile(r"pass|secret|token|key", re.I)
-_SECRET_KV = re.compile(rf"""(\w*(?:{_SECRET_NAME.pattern})\w*)=('[^']*'|"[^"]*"|\S+)""", re.I)
+_SECRET_NAME = re.compile(r"pass|secret|token|key", re.IGNORECASE)
+_SECRET_KV = re.compile(rf"""(\w*(?:{_SECRET_NAME.pattern})\w*)=('[^']*'|"[^"]*"|\S+)""", re.IGNORECASE)
 
 
 def _scrub(v):
@@ -156,7 +156,7 @@ class CallbackModule(CallbackBase):
         who = self._who()["user"]
         safe = lambda s: re.sub(r"[^A-Za-z0-9._-]", "_", s)
         fname = f"{self.started.strftime('%Y%m%dT%H%M%SZ')}_{safe(who)}_{safe(pb)}_{self.run_id}.jsonl"
-        self.fh = open(os.path.join(d, fname), "a", encoding="utf-8")
+        self.fh = open(os.path.join(d, fname), "a", encoding="utf-8")  # noqa: SIM115 - held open for the run, closed in v2_playbook_on_stats
 
         args = context.CLIARGS
         extra = args.get("extra_vars") or ()
@@ -167,7 +167,7 @@ class CallbackModule(CallbackBase):
             "playbook_start",
             playbook=playbook._file_name,
             **self._who(),
-            argv=[_redact(a) for a in open("/proc/self/cmdline").read().split("\0")[:-1]],
+            argv=[_redact(a) for a in Path("/proc/self/cmdline").read_text().split("\0")[:-1]],
             inventory=list(args.get("inventory") or []),
             limit=args.get("subset"),
             tags=list(args.get("tags") or []),

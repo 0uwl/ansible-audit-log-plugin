@@ -28,7 +28,7 @@ def run(tmp_path, playbook, *args, ini=None, env_dir=True):
         env["ANSIBLE_AUDIT_DIR"] = str(tmp_path / "audit")
     return subprocess.run(
         ["ansible-playbook", "-i", "localhost,", str(PLAYBOOKS / playbook), *args],
-        env=env, cwd=tmp_path, capture_output=True, text=True,
+        check=False, env=env, cwd=tmp_path, capture_output=True, text=True,
     )
 
 
