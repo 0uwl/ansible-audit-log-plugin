@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -45,6 +46,7 @@ def test_smoke_run(tmp_path):
     assert p.returncode == 0, p.stdout + p.stderr
 
     f = audit_file(tmp_path)
+    assert records(tmp_path)[0]["uid"] == os.getuid()
     assert re.fullmatch(r"\d{8}T\d{6}Z_[^_].*_smoke\.yml_[0-9a-f]{6}\.jsonl", f.name)
     assert re.fullmatch(r"\d{4}/\d{2}", str(f.parent.relative_to(tmp_path / "audit")))
 

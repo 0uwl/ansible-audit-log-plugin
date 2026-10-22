@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import re
@@ -83,6 +84,44 @@ def test_user_fallback_chain(cb, monkeypatch, env, expected):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     assert cb._who()["user"] == expected
+
+
+def test_who_kernel_identity(cb):
+    who = cb._who()
+    assert who["uid"] == os.getuid()
+    assert {"host_uid", "loginuid"} <= who.keys()
+
+
+def fake_proc(monkeypatch, files):
+    real_open = open
+
+    def fake_open(path, *a, **kw):
+        if path in files:
+            if files[path] is None:
+                raise FileNotFoundError(path)
+            return io.StringIO(files[path])
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(audit_log, "open", fake_open, raising=False)
+
+
+@pytest.mark.parametrize("uid_map, uid, expected", [
+    ("         0          0 4294967295\n", 1000, 1000),
+    ("         0       1000          1\n         1     100000      65536\n", 0, 1000),
+    ("         0       1000          1\n         1     100000      65536\n", 5, 100004),
+    ("         0       1000          1\n", 7, None),
+    (None, 0, None),
+    ("garbage\n", 0, None),
+])
+def test_host_uid(monkeypatch, uid_map, uid, expected):
+    fake_proc(monkeypatch, {"/proc/self/uid_map": uid_map})
+    assert audit_log._host_uid(uid) == expected
+
+
+@pytest.mark.parametrize("content, expected", [("1000\n", 1000), ("4294967295\n", None), (None, None), ("x", None)])
+def test_loginuid(monkeypatch, content, expected):
+    fake_proc(monkeypatch, {"/proc/self/loginuid": content})
+    assert audit_log._loginuid() == expected
 
 
 def test_who_host_and_ssh(cb, monkeypatch):

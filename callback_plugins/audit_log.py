@@ -7,6 +7,9 @@ type: notification
 short_description: One JSONL audit file per playbook run
 description:
   - Records who ran which playbook, when, with what options, and per-host outcomes.
+  - The user is taken from the environment, which the caller controls. C(uid), C(host_uid) and C(loginuid) come from the kernel.
+    In a rootful container with no user namespace and no audit session they all read as root or unset,
+    so pass C(USER), C(SUDO_USER) or C(SSH_CONNECTION) into the container.
 requirements:
   - Enable in C(callback_enabled)
   - A writeable C(audit_dir) for the user executing Ansible on the controller
@@ -52,6 +55,29 @@ def _scrub(v):
     if isinstance(v, list):
         return [_scrub(x) for x in v]
     return v
+
+
+def _host_uid(uid):
+    # translate uid through the user namespace; rootless containers map their root to the real user
+    try:
+        with open("/proc/self/uid_map") as f:
+            for line in f:
+                inside, outside, count = map(int, line.split())
+                if inside <= uid < inside + count:
+                    return outside + uid - inside
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def _loginuid():
+    # audit login uid, set by PAM at login and not changeable by the user; 4294967295 means unset
+    try:
+        with open("/proc/self/loginuid") as f:
+            uid = int(f.read())
+    except (OSError, ValueError):
+        return None
+    return None if uid == 4294967295 else uid
 
 
 def _extra_keys(e):
@@ -108,12 +134,16 @@ class CallbackModule(CallbackBase):
 
     def _who(self):
         env = os.environ
+        uid = os.getuid()
         return {
             "user": env.get("SUDO_USER") or env.get("USER") or env.get("LOGNAME") or "unknown",
             "login_user": env.get("USER"),
             "sudo_user": env.get("SUDO_USER"),
             "ssh_connection": env.get("SSH_CONNECTION"),
             "container_host": socket.gethostname(),
+            "uid": uid,
+            "host_uid": _host_uid(uid),
+            "loginuid": _loginuid(),
         }
 
     # --- playbook lifecycle -----------------------------------------
