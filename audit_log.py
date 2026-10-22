@@ -26,7 +26,6 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-# ponytail: name-based denylist; secrets under innocuous key names are not caught
 _SECRET_NAME = re.compile(r"pass|secret|token|key", re.I)
 _SECRET_KV = re.compile(rf"""(\w*(?:{_SECRET_NAME.pattern})\w*)=('[^']*'|"[^"]*"|\S+)""", re.I)
 
@@ -107,7 +106,6 @@ class CallbackModule(CallbackBase):
         args = context.CLIARGS
         extra = args.get("extra_vars") or ()
         # names of all extra vars; values only appear in argv, with secret-looking ones redacted
-        # ponytail: @file vars yield no keys (file not read)
         extra_keys = sorted({k for e in extra for k in _extra_keys(e)})
 
         self._write(
