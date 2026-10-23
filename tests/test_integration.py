@@ -13,10 +13,11 @@ ROOT = Path(__file__).resolve().parent.parent
 PLAYBOOKS = ROOT / "tests" / "playbooks"
 
 
-def run(tmp_path, playbook, *args, ini=None, env_dir=True):
+def run(tmp_path, playbook, *args, ini=None, env_dir=True, env=None):
     cfg = tmp_path / "ansible.cfg"
     cfg.write_text(ini or "")
     env = {
+        **(env or {}),
         "PATH": shutil.os.environ["PATH"],
         "HOME": str(tmp_path),
         "ANSIBLE_CONFIG": str(cfg),
@@ -94,3 +95,13 @@ def test_ini_audit_dir(tmp_path):
     p = run(tmp_path, "smoke.yml", ini=ini, env_dir=False)
     assert p.returncode == 0, p.stdout + p.stderr
     assert records(tmp_path)[0]["event"] == "playbook_start"
+
+
+def test_syslog_format_env(tmp_path):
+    p = run(tmp_path, "smoke.yml", env={"ANSIBLE_AUDIT_SYSLOG_FORMAT": "true"})
+    assert p.returncode == 0, p.stdout + p.stderr
+    (f,) = (tmp_path / "audit").rglob("*.log")
+    lines = f.read_text().splitlines()
+    assert all("ansible-audit[" in line for line in lines)
+    assert lines[0].split(": ", 1)[1].startswith("playbook_start ")
+    assert lines[-1].split(": ", 1)[1].startswith("playbook_end ")

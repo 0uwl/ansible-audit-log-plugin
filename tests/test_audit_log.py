@@ -149,7 +149,7 @@ def test_unsafe_chars_sanitised(cb, tmp_path, monkeypatch):
 def test_set_options_creates_audit_dir(cb, tmp_path, monkeypatch):
     target = tmp_path / "new" / "logs"
     monkeypatch.setattr(audit_log.CallbackBase, "set_options", lambda *a, **kw: None)
-    monkeypatch.setattr(cb, "get_option", lambda name: str(target))
+    monkeypatch.setattr(cb, "get_option", lambda name: {"audit_dir": str(target), "syslog_format": False}[name])
     cb.set_options()
     assert cb.audit_dir == str(target) and target.is_dir()
 
@@ -335,3 +335,39 @@ def test_full_run_event_sequence(cb, tmp_path):
     recs = records(tmp_path)
     assert [r["event"] for r in recs] == ["playbook_start", "play_start", "task_start", "task_result", "playbook_end"]
     assert len({r["run_id"] for r in recs}) == 1
+
+
+# --- syslog format -----------------------------------------------------
+
+@pytest.mark.parametrize("value, expected", [
+    ("apt", "apt"),
+    ("/srv/site.yml", "/srv/site.yml"),
+    ("a b", '"a b"'),
+    ('say "hi"', '"say \\"hi\\""'),
+    ("", '""'),
+    ("null", '"null"'),
+    ("true", '"true"'),
+    ("42", '"42"'),
+    (None, "null"),
+    (42, "42"),
+    (False, "false"),
+    (["a"], '["a"]'),
+    ({"k": 1, "l": [1, 2]}, '{"k":1,"l":[1,2]}'),
+])
+def test_fmt(value, expected):
+    assert audit_log._fmt(value) == expected
+
+
+def test_syslog_format_line(cb, tmp_path):
+    cb.syslog_format = True
+    cb.host = "ctl01"
+    cb.v2_playbook_on_start(playbook())
+    cb.v2_runner_on_failed(result(task="Install nginx", rc=100))
+    cb.v2_playbook_on_stats(stats({"web1": host_stats(failures=1)}))
+    (f,) = tmp_path.rglob("*.log")
+    assert f.name.endswith(f"_{cb.run_id}.log") and not list(tmp_path.rglob("*.jsonl"))
+    start, res, end = f.read_text().splitlines()
+    prefix = f"{T0.isoformat()} ctl01 ansible-audit[{cb.run_id}]: "
+    assert start.startswith(prefix + "playbook_start playbook=/srv/site.yml user=alice ")
+    assert res == prefix + 'task_result status=failed host=web1 task="Install nginx" action=apt changed=false rc=100'
+    assert end.startswith(prefix + "playbook_end duration_s=0.0 success=false recap={")

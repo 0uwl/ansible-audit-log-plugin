@@ -4,7 +4,7 @@ DOCUMENTATION = r"""
 author: 0uwl
 name: audit_log
 type: notification
-short_description: One JSONL audit file per playbook run
+short_description: One JSONL or syslog-style audit file per playbook run
 description:
   - Records who ran which playbook, when, with what options, and per-host outcomes.
   - The user is taken from the environment, which the caller controls. C(uid), C(host_uid) and C(loginuid) come from the kernel.
@@ -23,6 +23,15 @@ options:
     ini:
       - section: callback_audit_log
         key: audit_dir
+  syslog_format:
+    default: false
+    description: Write syslog-style C(key=value) lines to a C(.log) file instead of JSONL.
+    type: bool
+    env:
+      - name: ANSIBLE_AUDIT_SYSLOG_FORMAT
+    ini:
+      - section: callback_audit_log
+        key: syslog_format
 """
 
 import json
@@ -101,9 +110,22 @@ def _redact(arg):
     return _SECRET_KV.sub(r"\1=***", arg)
 
 
+_BARE = re.compile(r"[A-Za-z0-9._/:@+-]+")
+
+
+def _fmt(v):
+    # bare only when unambiguous, otherwise JSON, so every value parses back exactly
+    if isinstance(v, str) and _BARE.fullmatch(v):
+        try:
+            json.loads(v)  # "null", "true", "42" would read back as non-strings
+        except ValueError:
+            return v
+    return json.dumps(v, cls=AnsibleJSONEncoder, separators=(",", ":"))
+
+
 class CallbackModule(CallbackBase):
     """
-    writes one JSONL audit file per playbook run under audit_dir
+    writes one JSONL (or syslog-style) audit file per playbook run under audit_dir
     """
 
     CALLBACK_VERSION = 2.0
@@ -116,19 +138,27 @@ class CallbackModule(CallbackBase):
         self.run_id = uuid.uuid4().hex[:6]
         self.fh = None
         self.started = None
+        self.syslog_format = False
+        self.host = socket.gethostname()
 
     def set_options(self, task_keys=None, var_options=None, direct=None):
         super().set_options(task_keys=task_keys, var_options=var_options, direct=direct)
 
         self.audit_dir = self.get_option("audit_dir")
         makedirs_safe(self.audit_dir)
+        self.syslog_format = self.get_option("syslog_format")
 
     # --- helpers -----------------------------------------------------
     def _write(self, event, **data):
         if not self.fh:
             return
         rec = {"ts": _now().isoformat(), "run_id": self.run_id, "event": event, **data}
-        self.fh.write(json.dumps(rec, cls=AnsibleJSONEncoder) + "\n")
+        if self.syslog_format:
+            fields = " ".join(f"{k}={_fmt(v)}" for k, v in data.items())
+            line = f"{rec['ts']} {self.host} ansible-audit[{self.run_id}]: {event} {fields}"
+        else:
+            line = json.dumps(rec, cls=AnsibleJSONEncoder)
+        self.fh.write(line + "\n")
         self.fh.flush()
         os.fsync(self.fh.fileno())
 
@@ -155,7 +185,7 @@ class CallbackModule(CallbackBase):
         pb = os.path.basename(playbook._file_name)
         who = self._who()["user"]
         safe = lambda s: re.sub(r"[^A-Za-z0-9._-]", "_", s)
-        fname = f"{self.started.strftime('%Y%m%dT%H%M%SZ')}_{safe(who)}_{safe(pb)}_{self.run_id}.jsonl"
+        fname = f"{self.started.strftime('%Y%m%dT%H%M%SZ')}_{safe(who)}_{safe(pb)}_{self.run_id}.{'log' if self.syslog_format else 'jsonl'}"
         self.fh = open(os.path.join(d, fname), "a", encoding="utf-8")  # noqa: SIM115 - held open for the run, closed in v2_playbook_on_stats
 
         args = context.CLIARGS

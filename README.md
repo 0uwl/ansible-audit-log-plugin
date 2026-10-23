@@ -27,6 +27,7 @@ or with `ANSIBLE_CALLBACKS_ENABLED=audit_log`.
 | Option | Default | Env | ini |
 | --- | --- | --- | --- |
 | `audit_dir` | `/audit/logs` | `ANSIBLE_AUDIT_DIR` | `[callback_audit_log] audit_dir` |
+| `syslog_format` | `false` | `ANSIBLE_AUDIT_SYSLOG_FORMAT` | `[callback_audit_log] syslog_format` |
 
 The directory is created at startup if missing, and the user running Ansible must be able to write to it. Files go in `YYYY/MM` subfolders.
 
@@ -51,6 +52,16 @@ One JSON object per line. Every line has `ts` (UTC ISO 8601), `run_id` (shared b
 | `task_start` | `task`, `action` |
 | `task_result` | `status` (`ok`, `failed`, `failed_ignored`, `skipped`, `unreachable`, `async_failed`), `host`, `task`, `action`, `changed`, `rc` |
 | `playbook_end` | `duration_s`, `success`, `recap` (per-host counts) |
+
+### Syslog format
+
+With `syslog_format` enabled, the file ends in `.log` instead of `.jsonl` and each record is one line of the form `<ts> <container_host> ansible-audit[<run_id>]: <event> key=value ...`, with the same fields in the same order:
+
+```
+2026-10-22T19:30:58.910000+00:00 ctl01 ansible-audit[1602b9]: task_result status=failed host=web1 task="Install nginx" action=apt changed=false rc=100
+```
+
+Nothing is lost. A string is written bare only if it contains just `A-Za-z0-9._/:@+-` and would not read as another type. Every other value is compact JSON, so `sudo_user=null` means unset, `sudo_user="null"` is the literal string, and lists and the recap are JSON arrays and objects. The `jq` and shipping examples below assume the default JSONL format.
 
 Query with `jq`, for example failed tasks across all runs:
 
