@@ -135,6 +135,15 @@ sinks:
     endpoints: ["http://elasticsearch:9200"]
 ```
 
+## audit_log_plays
+
+`callback_plugins/audit_log_plays.py` extends the community `log_plays` plugin, so task output is logged per host as before, with two changes:
+
+- files go in `<log_folder>/YYYY/MM/DD/<host>`, dated by the UTC playbook start time
+- each line ends with ` - user=<name>`, resolved the same way as `audit_log` (`SUDO_USER`, then `USER`, then `LOGNAME`)
+
+It needs the `community.general` collection. Enable it with `callbacks_enabled = audit_log_plays`. The folder is set with `ANSIBLE_LOG_FOLDER` or `[callback_audit_log_plays] log_folder`, default `/var/log/ansible/hosts`.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).

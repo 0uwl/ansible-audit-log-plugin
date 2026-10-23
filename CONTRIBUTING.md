@@ -2,7 +2,7 @@
 
 ## Setup
 
-You need [uv](https://docs.astral.sh/uv/). Dependencies (`ansible-core`, `pytest`, `pyyaml`) are declared in the `dev` group in `pyproject.toml`; uv installs them into `.venv/` on first run.
+You need [uv](https://docs.astral.sh/uv/). Dependencies (`ansible`, which bundles `community.general` for `audit_log_plays`, plus `pytest` and `pyyaml`) are declared in the `dev` group in `pyproject.toml`; uv installs them into `.venv/` on first run.
 
 ## Running the tests
 
