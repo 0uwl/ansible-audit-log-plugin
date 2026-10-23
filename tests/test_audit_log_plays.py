@@ -1,3 +1,4 @@
+import io
 import os
 import pwd
 from datetime import datetime, timezone
@@ -64,6 +65,26 @@ def test_owner_matches_file_owner(cb, tmp_path):
     cb.v2_runner_on_ok(result())
     (f,) = tmp_path.rglob("web1")
     assert f.parent.name == pwd.getpwuid(f.stat().st_uid).pw_name
+
+
+@pytest.mark.parametrize("uid_map, euid, expected", [
+    ("         0       1000          1\n         1     100000      65536\n", 0, "1000"),  # rootless podman
+    ("         0          0 4294967295\n", 0, "root"),  # host or rootful container
+    (None, 0, "root"),  # no /proc
+])
+def test_owner_in_user_namespace(monkeypatch, uid_map, euid, expected):
+    real_open = open
+
+    def fake_open(path, *a, **kw):
+        if path == "/proc/self/uid_map":
+            if uid_map is None:
+                raise FileNotFoundError(path)
+            return io.StringIO(uid_map)
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(audit_log_plays, "open", fake_open, raising=False)
+    monkeypatch.setattr(audit_log_plays.os, "geteuid", lambda: euid)
+    assert audit_log_plays._owner() == expected
 
 
 def test_owner_falls_back_to_uid(monkeypatch):

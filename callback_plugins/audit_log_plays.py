@@ -56,9 +56,27 @@ def _makedirs_shared(base, *parts):
     return path
 
 
+def _host_uid(uid):
+    # translate uid through the user namespace; rootless containers map their root to the real user
+    try:
+        with open("/proc/self/uid_map") as f:
+            for line in f:
+                inside, outside, count = map(int, line.split())
+                if inside <= uid < inside + count:
+                    return outside + uid - inside
+    except (OSError, ValueError):
+        pass
+    return None
+
+
 def _owner():
     # name of the uid that will own the files, from the kernel rather than the environment
     uid = os.geteuid()
+    host = _host_uid(uid)
+    if host is not None and host != uid:
+        # inside a user namespace: the container's passwd doesn't know the host account, and may give
+        # the host uid a different name (uid 1000 is "ubuntu" in ubuntu images), so use the number
+        return str(host)
     try:
         return pwd.getpwuid(uid).pw_name
     except KeyError:

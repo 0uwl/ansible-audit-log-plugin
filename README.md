@@ -156,6 +156,10 @@ sinks:
 
 `<owner>` is the account of the effective uid, taken from the kernel rather than the environment, so it always matches the owner of the folder and its files. `user=` is the user named in the environment. Under `sudo` the folder is `root/` and the line says `user=alice`. If the two disagree without sudo, someone changed `USER`.
 
+In a rootless container (such as podman), Ansible runs as uid 0 inside, but the files are owned by your real user on the host. The plugin translates the uid through `/proc/self/uid_map`, so the folder is the host uid number, for example `1000/`. The container's `/etc/passwd` doesn't know host accounts, so the number is used rather than a name. On the host, `getent passwd 1000` gives the name. With `--userns=keep-id` the uid is the same inside and out, so the folder gets the name. In a rootful container the folder is `root/`, because the files really are owned by root.
+
+For the shared group to work in a rootless container, the group has to be visible inside it: `podman run --group-add keep-groups`.
+
 The `YYYY/MM/DD` folders are created setgid with mode `2770`, the same as `audit_log`'s, so set up `log_folder` with a shared group the same way (see [Several users on one controller](#several-users-on-one-controller)).
 
 It needs the `community.general` collection. Enable it with `callbacks_enabled = audit_log_plays`. The folder is set with `ANSIBLE_LOG_FOLDER` or `[callback_audit_log_plays] log_folder`, default `/var/log/ansible/hosts`.
