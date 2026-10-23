@@ -31,6 +31,18 @@ or with `ANSIBLE_CALLBACKS_ENABLED=audit_log`.
 
 The directory is created at startup if missing, and the user running Ansible must be able to write to it. Files go in `YYYY/MM` subfolders.
 
+### Several users on one controller
+
+The `YYYY/MM` folders are shared by everyone who runs playbooks, so the plugin creates them setgid and group-writable (mode `2770`) and does not leave it to the first user's umask. Give the users a common group and set up the base folder once:
+
+```sh
+groupadd ansible-log
+usermod -aG ansible-log alice        # each user who runs playbooks, plus the log shipper
+install -d -g ansible-log -m 2770 /audit/logs
+```
+
+New folders then inherit the group, and every member can add files to them. Folders that already exist are left as they are.
+
 ## Use
 
 Run playbooks as usual:
@@ -139,8 +151,12 @@ sinks:
 
 `callback_plugins/audit_log_plays.py` extends the community `log_plays` plugin, so task output is logged per host as before, with two changes:
 
-- files go in `<log_folder>/YYYY/MM/DD/<host>`, dated by the UTC playbook start time
+- files go in `<log_folder>/YYYY/MM/DD/<owner>/<host>`, dated by the UTC playbook start time
 - each line ends with ` - user=<name>`, resolved the same way as `audit_log` (`SUDO_USER`, then `USER`, then `LOGNAME`)
+
+`<owner>` is the account of the effective uid, taken from the kernel rather than the environment, so it always matches the owner of the folder and its files. `user=` is the user named in the environment. Under `sudo` the folder is `root/` and the line says `user=alice`. If the two disagree without sudo, someone changed `USER`.
+
+The `YYYY/MM/DD` folders are created setgid with mode `2770`, the same as `audit_log`'s, so set up `log_folder` with a shared group the same way (see [Several users on one controller](#several-users-on-one-controller)).
 
 It needs the `community.general` collection. Enable it with `callbacks_enabled = audit_log_plays`. The folder is set with `ANSIBLE_LOG_FOLDER` or `[callback_audit_log_plays] log_folder`, default `/var/log/ansible/hosts`.
 

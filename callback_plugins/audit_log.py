@@ -16,7 +16,7 @@ requirements:
 options:
   audit_dir:
     default: /audit/logs
-    description: The folder where audit files are created, in C(YYYY/MM) subfolders.
+    description: The folder where audit files are created, in C(YYYY/MM) subfolders (created setgid, mode 2770).
     type: str
     env:
       - name: ANSIBLE_AUDIT_DIR
@@ -52,6 +52,21 @@ from ansible.utils.path import makedirs_safe
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _makedirs_shared(base, *parts):
+    # dated folders are shared by every user: make the ones we create setgid + group-writable,
+    # explicitly, since mkdir's mode is cut by the umask and the first user of the day would lock out the rest
+    # future: a second user hitting the instant between mkdir and chmod gets PermissionError; retry if it ever shows
+    path = base
+    for part in parts:
+        path = os.path.join(path, part)
+        try:
+            os.mkdir(path)
+        except FileExistsError:
+            continue
+        os.chmod(path, 0o2770)
+    return path
 
 
 _SECRET_NAME = re.compile(r"pass|secret|token|key", re.IGNORECASE)
@@ -179,8 +194,7 @@ class CallbackModule(CallbackBase):
     # --- playbook lifecycle -----------------------------------------
     def v2_playbook_on_start(self, playbook):
         self.started = _now()
-        d = os.path.join(self.audit_dir, self.started.strftime("%Y"), self.started.strftime("%m"))
-        makedirs_safe(d)
+        d = _makedirs_shared(self.audit_dir, self.started.strftime("%Y"), self.started.strftime("%m"))
 
         pb = os.path.basename(playbook._file_name)
         who = self._who()["user"]

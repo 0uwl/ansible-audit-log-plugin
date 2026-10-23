@@ -139,6 +139,13 @@ def test_file_path_layout(cb, tmp_path):
     assert expected.is_file()
 
 
+def test_month_dirs_group_writable(cb, tmp_path):
+    (tmp_path / "2026").mkdir(mode=0o755)  # created earlier, maybe by someone else: left alone
+    cb.v2_playbook_on_start(playbook())
+    assert (tmp_path / "2026").stat().st_mode & 0o7777 != 0o2770
+    assert (tmp_path / "2026" / "01").stat().st_mode & 0o7777 == 0o2770
+
+
 def test_unsafe_chars_sanitised(cb, tmp_path, monkeypatch):
     monkeypatch.setenv("USER", "a b$c")
     cb.v2_playbook_on_start(playbook("/x/my play!.yml"))
