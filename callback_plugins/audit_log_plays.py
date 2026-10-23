@@ -41,6 +41,15 @@ from ansible_collections.community.general.plugins.callback.log_plays import (
     CallbackModule as LogPlays,
 )
 
+try:
+    from ansible_collections.community.general.plugins.module_utils._secrets import (
+        mask_secrets,
+    )
+except ImportError:
+    # older community.general (e.g. 9.x, the newest on python 3.10) has no secret masking
+    def mask_secrets(value):
+        return value
+
 
 def _now():
     return datetime.now(timezone.utc)
@@ -130,5 +139,6 @@ class CallbackModule(LogPlays):
         with open(path, "ab") as fd:
             fd.write(msg)
 
-    def _make_msg(self, *args):
-        return super()._make_msg(*args).rstrip("\n") + f" - user={self.user}\n\n"
+    def _make_msg(self, now, playbook, task_name, task_action, category, data):
+        # LogPlays._make_msg's line, built here since older community.general doesn't have it
+        return f"{now} - user={self.user} - {playbook} - {mask_secrets(task_name)} - {task_action} - {category} - {data}\n\n"

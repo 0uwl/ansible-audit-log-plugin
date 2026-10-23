@@ -41,14 +41,14 @@ def test_dated_folder_per_host(cb, tmp_path):
     cb.v2_runner_on_ok(result())
     line = (tmp_path / "2026" / "01" / "02" / OWNER / "web1.log").read_text()
     assert " - /srv/site.yml - install - apt - OK - " in line
-    assert line.endswith(" - user=alice\n\n")
+    assert " - user=alice - " in line
 
 
 def test_sudo_user_wins(cb, tmp_path, monkeypatch):
     monkeypatch.setenv("SUDO_USER", "bob")
     cb.v2_playbook_on_start(SimpleNamespace(_file_name="site.yml"))
     cb.v2_runner_on_ok(result())
-    assert (tmp_path / "2026" / "01" / "02" / OWNER / "web1.log").read_text().endswith(" - user=bob\n\n")
+    assert " - user=bob - " in (tmp_path / "2026" / "01" / "02" / OWNER / "web1.log").read_text()
 
 
 def test_next_day_new_folder(cb, clock, tmp_path):
