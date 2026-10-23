@@ -1,6 +1,7 @@
 # ansible-audit-log-plugin
 
-An Ansible callback plugin that writes one JSONL audit file per `ansible-playbook` run. It records who ran which playbook, when, with what options, and the outcome per host. Task output is not recorded; use the [log_plays](https://docs.ansible.com/projects/ansible/latest/collections/community/general/log_plays_callback.html) community plugin for that.
+`audit_log` is an Ansible callback plugin that writes one JSONL audit file per `ansible-playbook` run. It records who ran which playbook, when, with what options, and the outcome per host. Task output is not recorded; use the [log_plays](https://docs.ansible.com/projects/ansible/latest/collections/community/general/log_plays_callback.html) community plugin for that. This plugin
+is intended for users who are not using AWX/AAP but still want to trace who runs what in a structured format.
 
 ## Install
 
@@ -78,6 +79,50 @@ Redaction is name-based. A secret passed under an innocuous name, such as `-e fo
 ### Durability
 
 Each record is flushed and `fsync`ed as it is written, so a crashed run still leaves a log up to the failure, without a playbook_end line.
+
+### Shipping logs
+
+The plugin does not ship logs itself. Point a file-tailing agent at `audit_dir`; a slow or unreachable SIEM then never affects a playbook run. The examples assume the default `/audit/logs`. The agent's user needs read access to it. Each run is a new file, and both tools below pick up new `YYYY/MM` directories on their own.
+
+Filebeat (`filebeat.yml`):
+
+```yaml
+filebeat.inputs:
+  - type: filestream
+    id: ansible-audit
+    paths:
+      - /audit/logs/*/*/*.jsonl
+    parsers:
+      - ndjson:
+          target: ""
+          add_error_key: true
+
+output.logstash:
+  hosts: ["logstash:5044"]
+```
+
+Vector (`vector.yaml`):
+
+```yaml
+sources:
+  audit_files:
+    type: file
+    include:
+      - /audit/logs/*/*/*.jsonl
+
+transforms:
+  audit_json:
+    type: remap
+    inputs: [audit_files]
+    source: |
+      . = parse_json!(.message)
+
+sinks:
+  out:
+    type: elasticsearch
+    inputs: [audit_json]
+    endpoints: ["http://elasticsearch:9200"]
+```
 
 ## Contributing
 
