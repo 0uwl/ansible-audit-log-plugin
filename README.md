@@ -151,7 +151,7 @@ sinks:
 
 `callback_plugins/audit_log_plays.py` extends the community `log_plays` plugin, so task output is logged per host as before, with two changes:
 
-- files go in `<log_folder>/YYYY/MM/DD/<owner>/<host>`, dated by the UTC playbook start time
+- files go in `<log_folder>/YYYY/MM/DD/<owner>/<host>.log`, dated by the UTC playbook start time
 - each line ends with ` - user=<name>`, resolved the same way as `audit_log` (`SUDO_USER`, then `USER`, then `LOGNAME`)
 
 `<owner>` is the account of the effective uid, taken from the kernel rather than the environment, so it always matches the owner of the folder and its files. `user=` is the user named in the environment. Under `sudo` the folder is `root/` and the line says `user=alice`. If the two disagree without sudo, someone changed `USER`.

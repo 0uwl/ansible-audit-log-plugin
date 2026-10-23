@@ -39,7 +39,7 @@ def result(host="web1"):
 def test_dated_folder_per_host(cb, tmp_path):
     cb.v2_playbook_on_start(SimpleNamespace(_file_name="/srv/site.yml"))
     cb.v2_runner_on_ok(result())
-    line = (tmp_path / "2026" / "01" / "02" / OWNER / "web1").read_text()
+    line = (tmp_path / "2026" / "01" / "02" / OWNER / "web1.log").read_text()
     assert " - /srv/site.yml - install - apt - OK - " in line
     assert line.endswith(" - user=alice\n\n")
 
@@ -48,7 +48,7 @@ def test_sudo_user_wins(cb, tmp_path, monkeypatch):
     monkeypatch.setenv("SUDO_USER", "bob")
     cb.v2_playbook_on_start(SimpleNamespace(_file_name="site.yml"))
     cb.v2_runner_on_ok(result())
-    assert (tmp_path / "2026" / "01" / "02" / OWNER / "web1").read_text().endswith(" - user=bob\n\n")
+    assert (tmp_path / "2026" / "01" / "02" / OWNER / "web1.log").read_text().endswith(" - user=bob\n\n")
 
 
 def test_next_day_new_folder(cb, clock, tmp_path):
@@ -56,14 +56,14 @@ def test_next_day_new_folder(cb, clock, tmp_path):
     clock["t"] = T0.replace(day=3)
     cb.v2_playbook_on_start(SimpleNamespace(_file_name="site.yml"))
     cb.v2_runner_on_ok(result())
-    assert (tmp_path / "2026" / "01" / "03" / OWNER / "web1").is_file()
+    assert (tmp_path / "2026" / "01" / "03" / OWNER / "web1.log").is_file()
     assert cb.base_folder == str(tmp_path)
 
 
 def test_owner_matches_file_owner(cb, tmp_path):
     cb.v2_playbook_on_start(SimpleNamespace(_file_name="site.yml"))
     cb.v2_runner_on_ok(result())
-    (f,) = tmp_path.rglob("web1")
+    (f,) = tmp_path.rglob("web1.log")
     assert f.parent.name == pwd.getpwuid(f.stat().st_uid).pw_name
 
 

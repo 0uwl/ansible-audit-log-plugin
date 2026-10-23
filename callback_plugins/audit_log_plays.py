@@ -6,7 +6,7 @@ name: audit_log_plays
 type: notification
 short_description: community.general.log_plays with dated folders and the invoking user
 description:
-  - Same output as C(community.general.log_plays), but written to C(YYYY/MM/DD/<owner>/<host>) under C(log_folder),
+  - Same output as C(community.general.log_plays), but written to C(YYYY/MM/DD/<owner>/<host>.log) under C(log_folder),
     with C(user=<name>) appended to every line.
   - The user is taken from C(SUDO_USER), C(USER) or C(LOGNAME), the same way C(audit_log) does.
   - C(<owner>) is the account of the effective uid, so it always matches the owner of the folder and its files.
@@ -27,10 +27,15 @@ options:
         key: log_folder
 """
 
+import json
 import os
 import pwd
+import time
+from collections.abc import MutableMapping
 from datetime import datetime, timezone
 
+from ansible.module_utils.common.text.converters import to_bytes
+from ansible.parsing.ajson import AnsibleJSONEncoder
 from ansible.utils.path import makedirs_safe
 from ansible_collections.community.general.plugins.callback.log_plays import (
     CallbackModule as LogPlays,
@@ -103,6 +108,27 @@ class CallbackModule(LogPlays):
         makedirs_safe(self.log_folder)
         env = os.environ
         self.user = env.get("SUDO_USER") or env.get("USER") or env.get("LOGNAME") or "unknown"
+
+    def log(self, result, category):
+        # copy of LogPlays.log (community.general 13.5.0), which has no hook for the file name; only the path differs
+        data = result._result
+        if isinstance(data, MutableMapping):
+            if "_ansible_verbose_override" in data:
+                # avoid logging extraneous data
+                data = "omitted"
+            else:
+                data = data.copy()
+                invocation = data.pop("invocation", None)
+                data = json.dumps(data, cls=AnsibleJSONEncoder)
+                if invocation is not None:
+                    data = f"{json.dumps(invocation)} => {data} "
+
+        path = os.path.join(self.log_folder, f"{result._host.get_name()}.log")
+        now = time.strftime(self.TIME_FORMAT, time.localtime())
+
+        msg = to_bytes(self._make_msg(now, self.playbook, result._task.name, result._task.action, category, data))
+        with open(path, "ab") as fd:
+            fd.write(msg)
 
     def _make_msg(self, *args):
         return super()._make_msg(*args).rstrip("\n") + f" - user={self.user}\n\n"
