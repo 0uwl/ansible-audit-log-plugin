@@ -16,7 +16,7 @@ requirements:
 options:
   audit_dir:
     default: /audit/logs
-    description: The folder where audit files are created, in C(YYYY/MM) subfolders (created setgid, mode 2770).
+    description: The folder where audit files are created, in C(YYYY/MM) subfolders (created setgid and sticky, mode 3770).
     type: str
     env:
       - name: ANSIBLE_AUDIT_DIR
@@ -32,9 +32,52 @@ options:
     ini:
       - section: callback_audit_log
         key: syslog_format
+  syslog:
+    default: false
+    description:
+      - Also send every record to syslog (ident C(ansible-audit)), where it is written as the syslog user, or on another
+        host, out of reach of the user running Ansible. Failed (also ignored), unreachable and async-failed results are sent as C(err), the rest as C(info).
+      - If O(syslog_server) cannot be reached at startup, a warning is shown and only the audit file is written.
+    type: bool
+    env:
+      - name: ANSIBLE_AUDIT_SYSLOG
+    ini:
+      - section: callback_audit_log
+        key: syslog
+  syslog_server:
+    default: /dev/log
+    description:
+      - Where O(syslog) sends to, as in C(community.general.syslog_json). A path is a local socket, anything else a host
+        reached over UDP on O(syslog_port).
+    type: str
+    env:
+      - name: SYSLOG_SERVER
+    ini:
+      - section: callback_audit_log
+        key: syslog_server
+  syslog_port:
+    default: 514
+    description: Port of O(syslog_server) when it is a host.
+    type: int
+    env:
+      - name: SYSLOG_PORT
+    ini:
+      - section: callback_audit_log
+        key: syslog_port
+  syslog_facility:
+    default: user
+    description: Syslog facility to log as.
+    type: str
+    env:
+      - name: SYSLOG_FACILITY
+    ini:
+      - section: callback_audit_log
+        key: syslog_facility
 """
 
 import json
+import logging
+import logging.handlers
 import os
 import re
 import socket
@@ -55,8 +98,8 @@ def _now():
 
 
 def _makedirs_shared(base, *parts):
-    # dated folders are shared by every user: make the ones we create setgid + group-writable,
-    # explicitly, since mkdir's mode is cut by the umask and the first user of the day would lock out the rest
+    # dated folders are shared by every user: make the ones we create setgid + group-writable, and sticky so nobody
+    # can delete another user's file; explicitly, since mkdir's mode is cut by the umask and the first user of the day would lock out the rest
     # future: a second user hitting the instant between mkdir and chmod gets PermissionError; retry if it ever shows
     path = base
     for part in parts:
@@ -65,7 +108,7 @@ def _makedirs_shared(base, *parts):
             os.mkdir(path)
         except FileExistsError:
             continue
-        os.chmod(path, 0o2770)
+        os.chmod(path, 0o3770)
     return path
 
 
@@ -79,6 +122,22 @@ def _scrub(v):
     if isinstance(v, list):
         return [_scrub(x) for x in v]
     return v
+
+
+def _syslog_handler(server, port, facility, ident):
+    # same transport as community.general.syslog_json, plus local sockets: a path is a socket, anything else host:port over UDP
+    address = server if server.startswith("/") else (server, port)
+    handler = logging.handlers.SysLogHandler(address=address, facility=facility)
+    if handler.unixsocket and handler.socket.fileno() == -1:
+        # SysLogHandler swallows a failed connect and would retry on every record, printing a traceback each time
+        raise OSError("socket not reachable")
+    handler.ident = f"{ident}[{os.getpid()}]: "
+    return handler
+
+
+def _send(handler, level, msg):
+    # handler errors (oversized message, unknown facility) print to stderr instead of failing the run
+    handler.handle(logging.makeLogRecord({"msg": msg, "levelname": level}))
 
 
 def _host_uid(uid):
@@ -154,6 +213,7 @@ class CallbackModule(CallbackBase):
         self.fh = None
         self.started = None
         self.syslog_format = False
+        self.syslog = None
         self.host = socket.gethostname()
 
     def set_options(self, task_keys=None, var_options=None, direct=None):
@@ -162,6 +222,12 @@ class CallbackModule(CallbackBase):
         self.audit_dir = self.get_option("audit_dir")
         makedirs_safe(self.audit_dir)
         self.syslog_format = self.get_option("syslog_format")
+        if self.get_option("syslog"):
+            server = self.get_option("syslog_server")
+            try:
+                self.syslog = _syslog_handler(server, self.get_option("syslog_port"), self.get_option("syslog_facility"), "ansible-audit")
+            except OSError as e:
+                self._display.warning(f"audit_log: cannot reach syslog at {server}, writing the file only: {e}")
 
     # --- helpers -----------------------------------------------------
     def _write(self, event, **data):
@@ -171,11 +237,16 @@ class CallbackModule(CallbackBase):
         if self.syslog_format:
             fields = " ".join(f"{k}={_fmt(v)}" for k, v in data.items())
             line = f"{rec['ts']} {self.host} ansible-audit[{self.run_id}]: {event} {fields}"
+            # the syslog receiver stamps its own time and host, and the ident carries the pid, not the run_id
+            msg = f"[{self.run_id}] {event} {fields}"
         else:
-            line = json.dumps(rec, cls=AnsibleJSONEncoder)
+            msg = line = json.dumps(rec, cls=AnsibleJSONEncoder)
         self.fh.write(line + "\n")
         self.fh.flush()
         os.fsync(self.fh.fileno())
+        if self.syslog:
+            failed = data.get("status") in ("failed", "failed_ignored", "unreachable", "async_failed") or data.get("success") is False
+            _send(self.syslog, "ERROR" if failed else "INFO", msg)
 
     def _who(self):
         env = os.environ

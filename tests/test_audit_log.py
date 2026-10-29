@@ -142,8 +142,8 @@ def test_file_path_layout(cb, tmp_path):
 def test_month_dirs_group_writable(cb, tmp_path):
     (tmp_path / "2026").mkdir(mode=0o755)  # created earlier, maybe by someone else: left alone
     cb.v2_playbook_on_start(playbook())
-    assert (tmp_path / "2026").stat().st_mode & 0o7777 != 0o2770
-    assert (tmp_path / "2026" / "01").stat().st_mode & 0o7777 == 0o2770
+    assert (tmp_path / "2026").stat().st_mode & 0o7777 != 0o3770
+    assert (tmp_path / "2026" / "01").stat().st_mode & 0o7777 == 0o3770
 
 
 def test_unsafe_chars_sanitised(cb, tmp_path, monkeypatch):
@@ -156,7 +156,7 @@ def test_unsafe_chars_sanitised(cb, tmp_path, monkeypatch):
 def test_set_options_creates_audit_dir(cb, tmp_path, monkeypatch):
     target = tmp_path / "new" / "logs"
     monkeypatch.setattr(audit_log.CallbackBase, "set_options", lambda *a, **kw: None)
-    monkeypatch.setattr(cb, "get_option", lambda name: {"audit_dir": str(target), "syslog_format": False}[name])
+    monkeypatch.setattr(cb, "get_option", lambda name: {"audit_dir": str(target), "syslog_format": False, "syslog": False}[name])
     cb.set_options()
     assert cb.audit_dir == str(target) and target.is_dir()
 
@@ -378,3 +378,52 @@ def test_syslog_format_line(cb, tmp_path):
     assert start.startswith(prefix + "playbook_start playbook=/srv/site.yml user=alice ")
     assert res == prefix + 'task_result status=failed host=web1 task="Install nginx" action=apt changed=false rc=100'
     assert end.startswith(prefix + "playbook_end duration_s=0.0 success=false recap={")
+
+
+@pytest.fixture
+def udp():
+    # a local UDP syslog receiver; recv() returns (priority, message) with the ident stripped
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.settimeout(2)
+
+    def recv():
+        pri, rest = re.fullmatch(r"<(\d+)>(.*)", sock.recv(65535).decode().rstrip("\0"), re.DOTALL).groups()
+        ident, msg = rest.split(": ", 1)
+        assert re.fullmatch(r"ansible-audit\[\d+\]", ident)
+        return int(pri), msg
+
+    recv.port = sock.getsockname()[1]
+    yield recv
+    sock.close()
+
+
+def test_syslog_gets_every_record(cb, tmp_path, udp):
+    cb.syslog = audit_log._syslog_handler("127.0.0.1", udp.port, "user", "ansible-audit")
+    cb.v2_playbook_on_start(playbook())
+    cb.v2_runner_on_failed(result())
+    cb.v2_playbook_on_stats(stats({"web1": host_stats(failures=1)}))
+    got = [udp() for _ in range(3)]
+    assert [json.loads(m) for _, m in got] == records(tmp_path)
+    assert [p for p, _ in got] == [14, 11, 11]  # facility user (1) * 8 + info (6) / err (3)
+
+
+def test_syslog_format_to_syslog_has_no_timestamp(cb, udp):
+    cb.syslog = audit_log._syslog_handler("127.0.0.1", udp.port, "user", "ansible-audit")
+    cb.syslog_format = True
+    cb.v2_playbook_on_start(playbook())
+    cb.v2_runner_on_ok(result())
+    udp()
+    assert udp() == (14, f"[{cb.run_id}] task_result status=ok host=web1 task=install action=apt changed=false rc=null")
+
+
+def test_syslog_unreachable_warns_and_keeps_file(cb, tmp_path, monkeypatch):
+    opts = {"audit_dir": str(tmp_path), "syslog_format": False, "syslog": True,
+            "syslog_server": str(tmp_path / "no.sock"), "syslog_port": 514, "syslog_facility": "user"}
+    monkeypatch.setattr(audit_log.CallbackBase, "set_options", lambda *a, **kw: None)
+    monkeypatch.setattr(cb, "get_option", opts.__getitem__)
+    monkeypatch.setattr(cb, "_display", MagicMock())
+    cb.set_options()
+    assert cb.syslog is None and "cannot reach syslog" in cb._display.warning.call_args[0][0]
+    cb.v2_playbook_on_start(playbook())
+    assert records(tmp_path)

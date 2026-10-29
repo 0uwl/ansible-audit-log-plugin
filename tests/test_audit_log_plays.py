@@ -1,6 +1,8 @@
 import io
 import os
 import pwd
+import re
+import socket
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -95,5 +97,20 @@ def test_owner_falls_back_to_uid(monkeypatch):
 def test_dated_dirs_group_writable(cb, tmp_path):
     cb.v2_playbook_on_start(SimpleNamespace(_file_name="site.yml"))
     for d in ("2026", "2026/01", "2026/01/02"):
-        assert (tmp_path / d).stat().st_mode & 0o7777 == 0o2770
-    assert tmp_path.stat().st_mode & 0o7777 != 0o2770  # existing base folder left alone
+        assert (tmp_path / d).stat().st_mode & 0o7777 == 0o3770
+    assert tmp_path.stat().st_mode & 0o7777 != 0o3770  # existing base folder left alone
+
+
+def test_syslog_gets_every_line(cb, tmp_path):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.settimeout(2)
+    cb.syslog = audit_log_plays._syslog_handler("127.0.0.1", sock.getsockname()[1], "user", "ansible-audit-plays")
+    cb.v2_playbook_on_start(SimpleNamespace(_file_name="site.yml"))
+    cb.v2_runner_on_ok(result())
+    cb.v2_runner_on_failed(result())
+    ok, failed = (sock.recv(65535).decode().rstrip("\0") for _ in range(2))
+    sock.close()
+    first = (tmp_path / "2026" / "01" / "02" / OWNER / "web1.log").read_text().split("\n\n")[0]
+    assert re.fullmatch(r"<14>ansible-audit-plays\[\d+\]: host=web1 (.*)", ok).group(1) == first
+    assert failed.startswith("<11>") and " - FAILED - " in failed
